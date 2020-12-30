@@ -291,11 +291,19 @@ KMCUDAResult kmeans_init_centroids(
         atomic_float dist_sum = 0;
         RETERR(kmeans_cuda_plus_plus(
             samples_size, features_size, i, metric, devs, fp16x2, verbosity,
-            samples, centroids, dists, host_dists.get(), &dist_sum),
+            samples, centroids, dists, host_dists.get(), &dist_sum, false),
                DEBUG("\nkmeans_cuda_plus_plus failed\n"));
         if (dist_sum != dist_sum) {
+          INFO("\nkmeans_cuda_plus_plus returned NaN, trying NaN-safe version\n");
+          RETERR(kmeans_cuda_plus_plus(
+              samples_size, features_size, i, metric, devs, fp16x2, verbosity,
+              samples, centroids, dists, host_dists.get(), &dist_sum, true),
+                 DEBUG("\nkmeans_cuda_plus_plus failed\n"));
           assert(dist_sum == dist_sum);
-          INFO("\ninternal bug inside kmeans_init_centroids: dist_sum is NaN\n");
+          if (dist_sum != dist_sum) {
+            assert(dist_sum == dist_sum);
+            INFO("\ninternal bug inside kmeans_init_centroids: dist_sum is NaN\n");
+          }
         }
         double choice = ((rand() + .0) / RAND_MAX);
         uint32_t choice_approx = choice * samples_size;

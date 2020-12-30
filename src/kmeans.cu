@@ -67,6 +67,33 @@ __global__ void kmeans_plus_plus(
 }
 
 template <KMCUDADistanceMetric M, typename F>
+__global__ void kmeans_plus_plus_no_nan(
+    const uint32_t offset, const uint32_t length, const uint32_t cc,
+    const F *__restrict__ samples, const F *__restrict__ centroids,
+    float *__restrict__ dists, atomic_float *__restrict__ dists_sum) {
+  uint32_t sample = blockIdx.x * blockDim.x + threadIdx.x;
+  float dist = 0;
+  if (sample < length) {
+    centroids += (cc - 1) * d_features_size;
+    const uint32_t local_sample = sample + offset;
+    if (_eq(samples[local_sample], samples[local_sample])) {
+      dist = METRIC<M, F>::distance_t_no_nan(
+          samples, centroids, d_samples_size, local_sample);
+    }
+    float prev_dist;
+    if (cc == 1 || dist < (prev_dist = dists[sample])) {
+      dists[sample] = dist;
+    } else {
+      dist = prev_dist;
+    }
+  }
+  dist = warpReduceSum(dist);
+  if (threadIdx.x % 32 == 0) {
+    atomicAdd(dists_sum, dist);
+  }
+}
+
+template <KMCUDADistanceMetric M, typename F>
 __global__ void kmeans_afkmc2_calc_q_dists(
     const uint32_t offset, const uint32_t length, uint32_t c1_index,
     const F *__restrict__ samples, float *__restrict__ dists,
@@ -775,7 +802,7 @@ KMCUDAResult kmeans_cuda_plus_plus(
     uint32_t h_samples_size, uint32_t h_features_size, uint32_t cc,
     KMCUDADistanceMetric metric, const std::vector<int> &devs, int fp16x2,
     int verbosity, const udevptrs<float> &samples, udevptrs<float> *centroids,
-    udevptrs<float> *dists, float *host_dists, atomic_float *dist_sum) {
+    udevptrs<float> *dists, float *host_dists, atomic_float *dist_sum, bool nan_safe) {
   auto plan = distribute(h_samples_size, h_features_size * sizeof(float), devs);
   uint32_t max_len = 0;
   for (auto &p : plan) {
@@ -795,11 +822,19 @@ KMCUDAResult kmeans_cuda_plus_plus(
     }
     dim3 block(BS_KMPP, 1, 1);
     dim3 grid(upper(length, block.x), 1, 1);
-    KERNEL_SWITCH(kmeans_plus_plus, <<<grid, block>>>(
-        offset, length, cc,
-        reinterpret_cast<const F*>(samples[devi].get()),
-        reinterpret_cast<const F*>((*centroids)[devi].get()),
-        (*dists)[devi].get(), dev_dists[devi].get()));
+    if(!nan_safe) {
+      KERNEL_SWITCH(kmeans_plus_plus, <<<grid, block>>>(
+          offset, length, cc,
+          reinterpret_cast<const F*>(samples[devi].get()),
+          reinterpret_cast<const F*>((*centroids)[devi].get()),
+          (*dists)[devi].get(), dev_dists[devi].get()));
+    } else {
+      KERNEL_SWITCH(kmeans_plus_plus_no_nan, <<<grid, block>>>(
+          offset, length, cc,
+          reinterpret_cast<const F*>(samples[devi].get()),
+          reinterpret_cast<const F*>((*centroids)[devi].get()),
+          (*dists)[devi].get(), dev_dists[devi].get()));
+    }
   );
   uint32_t dist_offset = 0;
   FOR_EACH_DEVI(

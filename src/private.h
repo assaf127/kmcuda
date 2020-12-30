@@ -324,7 +324,7 @@ KMCUDAResult kmeans_cuda_plus_plus(
     uint32_t samples_size, uint32_t features_size, uint32_t cc,
     KMCUDADistanceMetric metric, const std::vector<int> &devs, int fp16x2,
     int verbosity, const udevptrs<float> &samples, udevptrs<float> *centroids,
-    udevptrs<float> *dists, float *host_dists, atomic_float *dists_sum);
+    udevptrs<float> *dists, float *host_dists, atomic_float *dists_sum, bool nan_safe);
 
 /// Invokes afk-mc2 kernel "calc_q". Defined in kmeans.cu.
 KMCUDAResult kmeans_cuda_afkmc2_calc_q(
